@@ -1,0 +1,222 @@
+const express = require('express');
+const router = express.Router();
+const { body, validationResult } = require('express-validator');
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const Organization = require('../models/Organization');
+const { auth } = require('../middleware/auth');
+
+// Validation middleware
+const validateRegistration = [
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }),
+  body('firstName').trim().notEmpty(),
+  body('lastName').trim().notEmpty(),
+  body('organizationName').trim().notEmpty()
+];
+
+// Register new user with organization
+router.post('/register', validateRegistration, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { email, password, firstName, lastName, organizationName } = req.body;
+
+    // Check if user already exists
+    const existingUser = await User.findByEmail(email);
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User already exists'
+      });
+    }
+
+    // Create organization
+    const organization = new Organization({
+      name: organizationName,
+      slug: organizationName.toLowerCase().replace(/\s+/g, '-')
+    });
+    await organization.save();
+
+    // Create user
+    const user = new User({
+      email,
+      password,
+      firstName,
+      lastName,
+      organization: organization._id,
+      role: 'admin' // First user is admin
+    });
+    await user.save();
+
+    // Generate token
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: user.getPublicProfile(),
+      organization: organization.getPublicProfile()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error creating user',
+      error: error.message
+    });
+  }
+});
+
+// Login user
+router.post('/login', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').exists()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { email, password } = req.body;
+
+    // Find user
+    const user = await User.findByEmail(email);
+    if (!user || !user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Check password
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Update last login
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Generate token
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    // Get organization
+    const organization = await Organization.findById(user.organization);
+
+    res.json({
+      success: true,
+      token,
+      user: user.getPublicProfile(),
+      organization: organization.getPublicProfile()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error logging in',
+      error: error.message
+    });
+  }
+});
+
+// Join organization with invite code
+router.post('/join-organization', [
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }),
+  body('firstName').trim().notEmpty(),
+  body('lastName').trim().notEmpty(),
+  body('inviteCode').trim().notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { email, password, firstName, lastName, inviteCode } = req.body;
+
+    // Check if user exists
+    const existingUser = await User.findByEmail(email);
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User already exists'
+      });
+    }
+
+    // Find organization by invite code
+    const organization = await Organization.findOne({ inviteCode });
+    if (!organization) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid invite code'
+      });
+    }
+
+    // Create user
+    const user = new User({
+      email,
+      password,
+      firstName,
+      lastName,
+      organization: organization._id,
+      role: 'member'
+    });
+    await user.save();
+
+    // Generate token
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: user.getPublicProfile(),
+      organization: organization.getPublicProfile()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error joining organization',
+      error: error.message
+    });
+  }
+});
+
+// Get current user
+router.get('/me', auth, async (req, res) => {
+  try {
+    const organization = await Organization.findById(req.user.organization);
+    res.json({
+      success: true,
+      user: req.user.getPublicProfile(),
+      organization: organization.getPublicProfile()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching user data',
+      error: error.message
+    });
+  }
+});
+
+module.exports = router; 
