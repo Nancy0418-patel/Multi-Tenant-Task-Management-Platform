@@ -1,0 +1,85 @@
+const mongoose = require('mongoose');
+
+const taskSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  description: {
+    type: String,
+    trim: true
+  },
+  organization: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true
+  },
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  category: {
+    type: String,
+    enum: ['bug', 'feature', 'improvement'],
+    default: 'feature'
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium'
+  },
+  status: {
+    type: String,
+    enum: ['todo', 'in_progress', 'completed', 'expired'],
+    default: 'todo'
+  },
+  dueDate: {
+    type: Date,
+    required: true
+  },
+  completedAt: {
+    type: Date
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+// Index for efficient querying
+taskSchema.index({ organization: 1, status: 1 });
+taskSchema.index({ organization: 1, assignedTo: 1 });
+taskSchema.index({ dueDate: 1, status: 1 });
+
+// Method to check if task is overdue
+taskSchema.methods.isOverdue = function() {
+  return this.dueDate < new Date() && this.status !== 'completed';
+};
+
+// Method to mark task as completed
+taskSchema.methods.markAsCompleted = function() {
+  this.status = 'completed';
+  this.completedAt = new Date();
+  return this.save();
+};
+
+// Method to mark task as expired
+taskSchema.methods.markAsExpired = function() {
+  if (this.status !== 'completed') {
+    this.status = 'expired';
+    return this.save();
+  }
+  return Promise.resolve(this);
+};
+
+const Task = mongoose.model('Task', taskSchema);
+
+module.exports = Task; 
